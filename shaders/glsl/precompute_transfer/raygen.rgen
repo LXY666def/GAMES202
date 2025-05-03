@@ -1,0 +1,64 @@
+#version 460
+#extension GL_EXT_ray_tracing : enable
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_atomic_float : enable
+
+#define EPS 1e-4
+
+layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
+layout(binding = 1, set = 0) buffer Samples
+{
+	vec4 _sample[];
+} samples;
+layout(binding = 2, set = 0) uniform UBO
+{
+	vec3 vertex;
+	vec4 normal_sampleNum;
+} ubo;
+layout(binding = 3, set = 0) buffer SHResult
+{
+	float sh[];
+} shResult;
+
+layout(location = 0) rayPayloadEXT float hitValue;
+
+#include "random.glsl"
+
+const float shCoe[9] = float[](0.28209479177387814f,
+    0.4886025119029199f, 0.4886025119029199f, 0.4886025119029199f,
+    1.0925484305920792f, 1.0925484305920792f, 0.31539156525252005f, 1.0925484305920792f, 0.5462742152960396f);
+
+void main() 
+{	
+	uint idx = gl_LaunchSizeEXT.x * gl_LaunchSizeEXT.y * gl_LaunchIDEXT.z + gl_LaunchSizeEXT.x * gl_LaunchIDEXT.y + gl_LaunchIDEXT.x;
+	if (idx >= ubo.normal_sampleNum.w) {
+		return;
+	}
+    vec2 angles = (idx % 2 == 0) ? samples._sample[idx / 2].xy : samples._sample[idx / 2].zw;
+
+	vec3 origin = ubo.vertex;
+	float x = sin(angles.x)*cos(angles.y);
+	float y = cos(angles.x);
+	float z = sin(angles.x)*sin(angles.y);
+	vec3 direction = vec3(x, y, z);
+	float tmin = 0.001;
+	float tmax = 10000.0;
+
+    hitValue = 0.0f;
+	traceRayEXT(topLevelAS, gl_RayFlagsSkipClosestHitShaderEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
+	if (hitValue < EPS) {
+		return;
+	}
+	float xx = x*x, yy = y*y, zz = z*z, xy = x*y, yz = y*z, zx = z*x;
+	float cos = max(0.0f, dot(ubo.normal_sampleNum.xyz, direction));
+
+    atomicAdd(shResult.sh[0], cos * shCoe[0]);
+    atomicAdd(shResult.sh[1], cos * shCoe[1] * y);
+    atomicAdd(shResult.sh[2], cos * shCoe[2] * z);
+    atomicAdd(shResult.sh[3], cos * shCoe[3] * x);
+    atomicAdd(shResult.sh[4], cos * shCoe[4] * xy);
+    atomicAdd(shResult.sh[5], cos * shCoe[5] * yz);
+    atomicAdd(shResult.sh[6], cos * shCoe[6] * (3 * zz - 1));
+    atomicAdd(shResult.sh[7], cos * shCoe[7] * zx);
+    atomicAdd(shResult.sh[8], cos * shCoe[8] * (xx - yy));
+}
